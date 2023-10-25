@@ -7,12 +7,16 @@ from gan.gan import *
 from gan.wgan import *
 from get_examples import *
 import tensorflow as tf
-from keras.backend.tensorflow_backend import set_session
 
 """
 Script train.py
 Used to initialize a GAN in order to train it.
 """
+print(tf.executing_eagerly()) 
+
+visible_devices = tf.config.get_visible_devices()
+for devices in visible_devices:
+  print(devices)
 
 def parse_config(filename : str) -> dict :
     """
@@ -38,16 +42,29 @@ def instanciate(parameters : dict):
     """
     Instanciate the model and run the training
     """
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth=False
-    config.gpu_options.per_process_gpu_memory_fraction = parameters["MEMORY_ALLOC"]
-    set_session(tf.Session(config=config))
+    
+    # Configuring the GPU usage with TensorFlow 2.x
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+                if parameters["MEMORY_ALLOC"]:
+                    tf.config.experimental.set_virtual_device_configuration(
+                        gpu,
+                        [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=parameters["MEMORY_ALLOC"] * 16000)])  # Assuming MEMORY_ALLOC is in GB
+        except RuntimeError as e:
+            print(e)
 
     if not args.resume :
         if parameters["ALGORITHM"]=="GRADIENT_PENALTY":
+
             Gan = GAN(parameters)
+            
         elif parameters["ALGORITHM"]=="WEIGHT_CLIPPING":
+            
             Gan = WGAN(parameters)
+            
     else:
         assert(len(args.resume)==3)
         # args.resume[0] should be the last computed epoch
@@ -56,6 +73,7 @@ def instanciate(parameters : dict):
         epoch_to_resume = int(args.resume[0])
         if parameters["ALGORITHM"]=="GRADIENT_PENALTY":
             Gan = GAN(parameters, args.resume[1], args.resume[2], epoch_to_resume)
+            
         elif parameters["ALGORITHM"]=="WEIGHT_CLIPPING":
             Gan = WGAN(parameters, args.resume[1], args.resume[2], epoch_to_resume)
 
@@ -63,7 +81,9 @@ def instanciate(parameters : dict):
     with tf.device('/cpu:0'):
         if "cuts" in Gan.model_config :
             n = Gan.data_dim[0]
+            print('parameters',parameters,n)
             examples = get_train_examples_cuts(parameters,n)
+            
         else:
             examples = get_train_examples(parameters)
 
@@ -76,11 +96,11 @@ if __name__=="__main__":
     os.makedirs("models", exist_ok=True)
 
     parser = argparse.ArgumentParser(description="Various WGAN implementation for Keras.")
-    parser.add_argument('--output_name', '-out', required=True, type=str,
+    parser.add_argument('--output_name', '-out', default='strebelle_cuts3', type=str,
                         help="The parameter file name to be output.\n\
                         Will be saved in the 'models' folder")
 
-    parser.add_argument('--config', '-config', type=str, required=True,
+    parser.add_argument('--config', '-config', type=str,default=r'config\strebelle_cuts3.config',
                         help="The path to the config file you want to use")
 
     parser.add_argument('--resume', '-r', nargs="+",
