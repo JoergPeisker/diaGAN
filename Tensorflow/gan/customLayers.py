@@ -1,20 +1,36 @@
-from keras import backend as K
-from keras.models import Model
-from keras.layers import Layer, Input, Reshape, Lambda
-from keras.layers.merge import _Merge, Concatenate
+from tensorflow.keras import backend as K
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Layer, Input, Reshape, Lambda
+from tensorflow.keras.layers import Concatenate
 import numpy as np
+import tensorflow as tf
 
-class AverageSampler(_Merge):
-    """Takes a randomly-weighted average of two tensors. In geometric terms, this outputs a random point on the line
-    between each pair of input points."""
-
-    def __init__(self,size):
-        super(_Merge, self).__init__()
+class AverageSampler(tf.keras.layers.Layer):
+    def __init__(self, size, **kwargs):
+        super(AverageSampler, self).__init__(**kwargs)  # It's a good practice to forward arguments
         self.size = size
 
-    def _merge_function(self, inputs):
-        weights = K.random_uniform((self.size, 1, 1, 1))
-        return (weights * inputs[0]) + ((1 - weights) * inputs[1])
+    def call(self, inputs):
+        # We should verify that 'inputs' is a list or tuple of length 2
+        if not isinstance(inputs, (list, tuple)) or len(inputs) != 2:
+            raise ValueError("AverageSampler expects a list of two inputs tensors")
+
+        weights = tf.random.uniform((self.size, 1, 1, 1))
+        result = (weights * inputs[0]) + ((1 - weights) * inputs[1])
+        return result
+
+    def compute_output_shape(self, input_shape):
+        # If all input shapes are the same, you can return the first one
+        if isinstance(input_shape, list) and len(input_shape) > 0:
+            return input_shape[0]
+        else:
+            raise ValueError("Expected a list of input shapes")
+
+    def get_config(self):
+        # Implementing get_config is important for saving and loading a model with custom layers
+        config = super(AverageSampler, self).get_config()
+        config.update({"size": self.size})
+        return config
 
 class CutSampler(Layer):
     """
