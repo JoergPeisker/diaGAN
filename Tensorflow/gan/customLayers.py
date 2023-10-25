@@ -7,11 +7,11 @@ import tensorflow as tf
 
 class AverageSampler(tf.keras.layers.Layer):
     def __init__(self, size, **kwargs):
-        super(AverageSampler, self).__init__(**kwargs)  # It's a good practice to forward arguments
+        super(AverageSampler, self).__init__(**kwargs)
         self.size = size
 
     def call(self, inputs):
-        # We should verify that 'inputs' is a list or tuple of length 2
+        # verify that 'inputs' is a list or tuple of length 2
         if not isinstance(inputs, (list, tuple)) or len(inputs) != 2:
             raise ValueError("AverageSampler expects a list of two inputs tensors")
 
