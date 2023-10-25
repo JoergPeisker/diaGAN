@@ -3,18 +3,20 @@ import numpy as np
 from time import time
 from math import *
 from functools import partial
-
-from keras.models import Model, load_model, save_model
-from keras.layers import Input
-from keras.optimizers import Adam
-from keras.utils import Progbar
-from keras import backend as K
-import tensorflow as tf
-
+from functools import wraps
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.layers import Input
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.utils import Progbar
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.summary import create_file_writer
+import tensorflow as tf 
+import matplotlib.pyplot as plt
 from importlib import import_module
 from mpstool.img import *
 from .customLayers import *
 from .utils import *
+import datetime
 
 class GAN:
     """
@@ -40,7 +42,7 @@ class GAN:
     NORMAL_NOISE_STDV = 0.5
     UNIF_NOISE_MIN = 0
     UNIF_NOISE_MAX = 1
-
+    
     def __init__(self, *arg):
         """
         Initialization method.
@@ -74,7 +76,6 @@ class GAN:
             self.learning_rate = param["LEARNING_RATE"]
             self.n_critic = param["N_CRITIC"]
             self.multi_gpu = param["MULTI_GPU"]
-
             if self.verbose_mode:
                 print("\n\n### Initializing a GAN with the following parameters :")
                 print(" Algorithm : Gradient penalty")
@@ -104,6 +105,7 @@ class GAN:
             else:
                 self.gen = model.make_generator(self.noise_dim)
                 self.crit = model.make_critic(self.data_dim)
+                
             if self.verbose_mode:
                 visualize_model(self.gen)
                 visualize_model(self.crit)
@@ -121,15 +123,21 @@ class GAN:
 
             generator_input = Input(shape=self.noise_dim)
             generator_output = self.gen(generator_input)
-
+            print('generator_output before CutSampler',generator_output.shape)
             if "cuts" in self.model_config and self.model_config["cuts"]:
                 n_cuts = self.data_dim[0]
-                generator_output = CutSampler(n_cuts)(generator_output)
 
+                generator_output = CutSampler(n_cuts)(generator_output)
+                print('generator_output after CutSampler',generator_output.shape)
+            
             critic_output = self.crit(generator_output)
-            self.gen_trainer = Model(inputs=[generator_input], outputs=[critic_output])
+            print('critic_output',critic_output.shape)
+            self.gen_trainer = Model(inputs=[generator_input], 
+                                     outputs=[critic_output])
+            
             if self.multi_gpu:
                 self.gen_trainer = make_for_multi_gpu(self.gen_trainer)
+                
             self.gen_trainer.compile(optimizer=self.optim,
                                      loss=wasserstein_loss)
 
@@ -140,13 +148,27 @@ class GAN:
 
             for layer in self.gen.layers:
                 layer.trainable = False
-            self.gen.trainable = False
-
+            self.gen.trainable = False   
+            
             real_samples = Input(shape=self.data_dim)
+            print('real_samples',real_samples.shape)
+            
             generator_input_for_crit = Input(shape=self.noise_dim)
+            print('generator_input_for_crit',generator_input_for_crit.shape)
+            
             generator_output_for_crit = self.gen(generator_input_for_crit)
+            print('generator_output_for_crit',generator_output_for_crit.shape)
+            
+            if "cuts" in self.model_config and self.model_config["cuts"]:
+                n_cuts = self.data_dim[0]
+
+                generator_output_for_crit = CutSampler(n_cuts)(generator_output_for_crit)
+                print('generator_output_for_crit after CutSampler',generator_output_for_crit.shape)
+            
             critic_output_from_generator = self.crit(generator_output_for_crit)
+            print('critic_output_from_generator',critic_output_from_generator.shape)
             critic_output_from_real_samples = self.crit(real_samples)
+            print('critic_output_from_real_samples',critic_output_from_real_samples.shape)
             averaged_samples = AverageSampler(self.batch_size)([real_samples, generator_output_for_crit])
             critic_output_from_avg_samples = self.crit(averaged_samples)
 
@@ -154,19 +176,22 @@ class GAN:
                 critic_output_from_generator = make_for_multi_gpu(critic_output_from_generator)
                 critic_output_from_real_samples = make_for_multi_gpu(critic_output_from_real_samples)
                 # For some reason, we are unable to compute the gradient penalty loss on a multi GPU model
-
-            gp_loss = partial(gradient_penalty_loss,
-                              averaged_samples=averaged_samples)
+            
+            gradient_penalty = GradientPenaltyLayer(critic_model=self.crit)([critic_output_from_avg_samples, 
+                                                                             averaged_samples])
+            
 
             self.crit_trainer = Model(inputs=[real_samples, generator_input_for_crit],
                                       outputs=[critic_output_from_real_samples,
                                                critic_output_from_generator,
-                                               critic_output_from_avg_samples],
+                                               gradient_penalty
+                                               ],
                                       name="global")
+            
             self.crit_trainer.compile(optimizer=self.optim,
                                       loss=[wasserstein_loss,
                                             wasserstein_loss,
-                                            gp_loss],
+                                            mean_loss],
                                       loss_weights=[1, 1, GAN.LAMBDA])
             if self.verbose_mode:
                 visualize_model(self.crit_trainer)
@@ -192,6 +217,7 @@ class GAN:
         """
         Save both the generator and the critic model parameters onto the disk.
         """
+        
         self.gen.save(os.path.join("models",filename+".genmodel"))
         if save_critic:
             self.crit.save(os.path.join("models",filename+".critmodel"))
@@ -221,9 +247,10 @@ class GAN:
                 for i in range(10):
                     samples.append(self.generate())
                 tiled = Image.tile_images(samples, mode="h")
-                tiled.exportAsPng("output/epoch_{}.png".format(i_epoch), verbose=self.verbose_mode)
+                
+                tiled.exportAsPng("output/epochxa_{}.png".format(i_epoch), verbose=self.verbose_mode,colored=False)
             else:
-                self.generate().exportAsPng("output/epoch_{}.png".format(i_epoch), verbose=self.verbose_mode)
+                self.generate().exportAsPng("output/epochxa_{}.png".format(i_epoch), verbose=self.verbose_mode,colored=False)
 
     ## Training functions
     def get_noise(self, size):
@@ -244,6 +271,7 @@ class GAN:
 
     def get_batch(self, source, i, size):
         return source[i*size:(i+1)*size]
+    
 
     def train(self, examples, snapshot=False):
         """
@@ -254,12 +282,27 @@ class GAN:
             print("Models will be saved along the training in the 'models' folder")
         else:
             print("/!\ Snapshot option is disabled : no intermediate model will be saved.\nTo activate snapshot, use the -sn (or --snapshot) option")
+        
 
+        # Initialize the figure
 
+        datagen = ImageDataGenerator(
+                    rotation_range=20,      # Random rotations between -10 and 10 degrees
+                    width_shift_range=0.1,  # Random width shifts
+                    height_shift_range=0.1, # Random height shifts
+                    horizontal_flip=True,   # Random horizontal flipping
+                    shear_range=0.1,        # set range for random shear
+                    zoom_range=0.1,         # set range for random zoom
+                    fill_mode='nearest'     # Use nearest neighbors for filling gap
+                            )
         BATCH_SIZE = self.batch_size*self.n_critic
         MINIBATCH_SIZE = self.batch_size
+        
         NB_BATCH = examples.shape[0]//BATCH_SIZE
         EPOCH_SIZE = NB_BATCH*BATCH_SIZE # we dump the eventual non-complete batch at the end
+        
+        log_dir = "logs/train_data/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        summary_writer = create_file_writer(log_dir)
         dummy = np.zeros((MINIBATCH_SIZE, 1), dtype=np.float32) #given to the gradient penalty loss, but not used
         start_time = time()
 
@@ -268,24 +311,39 @@ class GAN:
             np.random.shuffle(examples)
             progbar = Progbar(EPOCH_SIZE)
             print("Epoch {}/{} :".format(i_epoch+ 1, self.nb_epochs))
+            
             for i_batch in range(NB_BATCH):
                 batch = self.get_batch(examples, i_batch, BATCH_SIZE)
                 critic_loss = []
                 generator_loss = []
+                
                 for i_minibatch in range(self.n_critic):
+                    
                     labels_for_real = self.get_label((MINIBATCH_SIZE,1))
                     labels_for_generated = -self.get_label((MINIBATCH_SIZE,1))
-                    minibatch = self.get_batch(batch, i_minibatch, MINIBATCH_SIZE)
+                    # Get original batch
+                    original_minibatch = self.get_batch(batch, i_minibatch, MINIBATCH_SIZE)
+
+                    # Perform augmentation
+                    minibatch = next(datagen.flow(original_minibatch, batch_size=MINIBATCH_SIZE))
+                    
                     loss =self.crit_trainer.train_on_batch(
                              [minibatch, self.get_noise(MINIBATCH_SIZE)],
                              [labels_for_real, labels_for_generated, dummy])
+                    
                     critic_loss.append(loss)
+                
                 loss = self.gen_trainer.train_on_batch(
                             self.get_noise(MINIBATCH_SIZE),
                             self.get_label((MINIBATCH_SIZE,1)))
                 generator_loss.append(loss)
                 progbar.add(BATCH_SIZE, values=[("Loss_critic", np.mean(critic_loss)-np.mean(generator_loss)),
                                                 ("Loss_generator", -np.mean(generator_loss))])
+                with summary_writer.as_default():
+                    tf.summary.scalar('Loss_critic', np.mean(critic_loss), step=i_epoch * NB_BATCH + i_batch)
+                    tf.summary.scalar('Loss_generator', -np.mean(generator_loss), step=i_epoch * NB_BATCH + i_batch)
+            
             print("Time: %.2fs, Total time : %.2fs\n" % (time()-epoch_time, time()-start_time))
             self.take_snapshot(i_epoch+1, snapshot=snapshot, tiled=True)
+        
         print("Training complete")
