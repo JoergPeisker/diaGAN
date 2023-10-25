@@ -1,9 +1,8 @@
 import os
-from os.path import join as pj
 import numpy as np
 from mpstool.img import *
 from copy import deepcopy
-
+import tqdm
 SAMPLE_RATE=10000
 
 def sample_from_png(filename, param):
@@ -41,37 +40,61 @@ def sample_from_gslib(filename, param):
     output = np.array([img.asArray() for img in output])
     return output
 
+def single_sample_from_path(path, param):
+    if path.endswith('.png'):
+        return sample_from_png(path, param)  # Assumes sample_from_png is a predefined function
+    elif path.endswith('.gslib'):
+        return sample_from_gslib(path, param)  # Assumes sample_from_gslib is a predefined function
+    else:
+        raise ValueError(f"Unsupported file format: {path}")
+
+def load_examples_from_folder(folder_path, extension, loader_function):
+    if not os.path.exists(folder_path):
+        raise FileNotFoundError(f"The specified folder does not exist: {folder_path}")
+
+    file_paths = [f for f in os.listdir(folder_path) if f.endswith(extension)]
+
+    if not file_paths:
+        raise ValueError(f"No {extension} files found in {folder_path}")
+
+    examples = []
+    for file_name in file_paths:
+        print(f"Reading file {file_name} ...")
+        file_path = os.path.join(folder_path, file_name)
+        image = loader_function(file_path)
+        examples.append(image)
+    return np.array(examples)
 
 def get_train_examples(param):
-    examples = []
-    path = pj(os.getcwd(),param["SOURCE"])
 
-    if '.png' in path:
-        return sample_from_png(path, param)
-    elif '.gslib' in path:
-        return sample_from_gslib(path, param)
+    path = os.path.join(os.getcwd(),param["SOURCE"])
+    
+    try:
+        if path.endswith(('.png', '.gslib')):
+                return single_sample_from_path(path,param)
 
-    print("Using examples from the '{}' folder".format(param["SOURCE"]))
-    path_png = pj(path,"png")
-    path_gslib = pj(path,"gslib")
+        print("Using examples from the '{}' folder".format(param["SOURCE"]))
+        path_png = os.path.join(path,"png")
+        path_gslib = os.path.join(path,"gslib")
 
-    # Loading from png subfolder
-    if os.path.exists(path_png):
-        for f in os.listdir(path_png):
-            print("Reading file {} ...".format(f))
-            image = Image.fromPng(pj(path_png,f), normalize=True)# data are in range [-1,1]
-            examples.append(image.asArray())
-        return np.array(examples)
+        # Loading from png subfolder
+        if os.path.exists(path_png):
+                return load_examples_from_folder(path_png, '.png', 
+                                                lambda p: Image.fromPng(p, 
+                                                                        normalize=True, 
+                                                                        channel_mode="Gray").asArray())
 
-    # Loading from gslib subfolder
-    elif os.path.exists(path_gslib):
-            path_gslib = pj(path,"gslib")
-            for f in os.listdir(path_gslib):
-                print("Reading file {} ...".format(f))
-                image = Image.fromGslib(pj(path_gslib,f), normalize=True)
-                # data are in range [-1,1]
-                examples.append(image.asArray())
-            return np.array(examples)
+        # Loading from gslib subfolder
+        if os.path.exists(path_gslib):
+                return load_examples_from_folder(path_gslib, '.gslib', 
+                                                lambda p: Image.fromGslib(p, 
+                                                                        normalize=True).asArray())
+
+        raise ValueError(f"No supported files found in the source folder: {path}")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        raise
 
 def sample_cuts_from_gslib(filename, param, nb_cuts):
     # Assumes the gslib represents some 3D data
@@ -113,15 +136,20 @@ def get_train_examples_cuts(param, nb_cuts):
         return sample_cuts_from_gslib(path, param, nb_cuts)
 
     # Sampling from png training image
-    source_x = Image.fromPng(pj(path,"x.png"))
-    source_y = Image.fromPng(pj(path,"y.png"))
-    source_z = Image.fromPng(pj(path,"z.png"))
+    source_x = Image.fromPng(os.path.join(path,"x.png"))
+    source_y = Image.fromPng(os.path.join(path,"y.png"))
+    source_z = Image.fromPng(os.path.join(path,"z.png"))
     output=[]
+    print('source_x',os.path.join(path,"x.png"))
+    print('source_y',os.path.join(path,"y.png"),)
+    print('source_z',os.path.join(path,"z.png"))
     extract_dim = param["DATA_DIM"][1:]+(1,)
-    for i in range(param["EPOCH_SIZE"]):
+    for i in tqdm(range(param["EPOCH_SIZE"])):
+
         sample_x = source_x.get_sample(extract_dim, normalize=True).asArray()
         sample_x = sample_x.reshape(sample_x.shape[:-1])
-        sample_y = source_y.get_sample(extract_dim, normalize=True).asArray()
+        
+        sample_y = source_y.get_sample(extract_dim,  normalize=True).asArray()
         sample_y = sample_y.reshape(sample_y.shape[:-1])
         sample = [sample_x, sample_y]
         if nb_cuts==3:
