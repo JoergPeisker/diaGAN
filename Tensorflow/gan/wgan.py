@@ -4,11 +4,11 @@ from time import time
 from math import *
 from functools import partial
 
-from keras.models import Model, load_model, save_model
-from keras.layers import Input
-from keras.optimizers import RMSprop
-from keras.utils import Progbar
-from keras import backend as K
+from tensorflow.keras.models import Model, load_model, save_model
+from tensorflow.keras.layers import Input
+from tensorflow.keras.optimizers import RMSprop
+from tensorflow.keras.utils import Progbar
+#from keras import backend as K
 
 from importlib import import_module
 from mpstool.img import *
@@ -54,6 +54,10 @@ class WGAN(GAN):
            When only one model is given, it is assumed that is it a generator
         """
 
+
+
+
+
         if isinstance(arg[0],dict):
             param = arg[0] # arg is a parameter dict for training the GAN
 
@@ -70,7 +74,6 @@ class WGAN(GAN):
             self.learning_rate = param["LEARNING_RATE"]
             self.batch_size = param["BATCH_SIZE"]
             self.verbose_mode = param["VERBOSE"]
-
             if self.verbose_mode:
                 print("\n\n### Initializing a GAN with the following parameters :")
                 print(" Algorithm : weight clipping (Wasserstein GAN)")
@@ -100,12 +103,16 @@ class WGAN(GAN):
             else:
                 self.gen = model.make_generator(self.noise_dim)
                 self.crit = model.make_critic(self.data_dim)
+            
             if self.verbose_mode:
                 visualize_model(self.gen)
                 visualize_model(self.crit)
 
             # Initialize the Adam optimizer
             self.optim = RMSprop(lr=self.learning_rate)
+
+
+
 
             # Compile the generator with fixed critic
             for layer in self.crit.layers:
@@ -117,13 +124,20 @@ class WGAN(GAN):
 
             if "cuts" in self.model_config and self.model_config["cuts"]:
                 n_cuts = self.data_dim[0]
+                
                 generator_output = CutSampler(n_cuts)(generator_output)
 
+
             critic_output = self.crit(generator_output)
+            
             self.gen_trainer = Model(inputs=[generator_input], outputs=[critic_output])
+            
+            
             if param["MULTI_GPU"]:
                 self.gen_trainer = make_for_multi_gpu(self.gen_trainer)
-            self.gen_trainer.compile(optimizer=self.optim, loss=wasserstein_loss)
+            
+            self.gen_trainer.compile(optimizer=self.optim, 
+                                     loss=wasserstein_loss)
 
             # compile critic with fixed generator
             for layer in self.crit.layers:
@@ -135,24 +149,41 @@ class WGAN(GAN):
             self.gen.trainable = False
 
             real_samples = Input(shape=self.data_dim)
+            
+            
             generator_input_for_crit = Input(shape=self.noise_dim)
+            
+            
             generator_output_for_crit = self.gen(generator_input_for_crit)
 
+            
+            if "cuts" in self.model_config and self.model_config["cuts"]:
+                n_cuts = self.data_dim[0]
+
+                generator_output_for_crit = CutSampler(n_cuts)(generator_output_for_crit)
+                print('generator_output_for_crit after CutSampler',generator_output_for_crit.shape)
+
+            
             critic_output_from_generator = self.crit(generator_output_for_crit)
+            
             critic_output_from_real_samples = self.crit(real_samples)
 
             self.crit_trainer = Model(inputs=[real_samples, generator_input_for_crit],
                                       outputs=[critic_output_from_real_samples,
                                                critic_output_from_generator],
                                       name="global")
+            
             self.crit_trainer.output_names = ['output_real', 'output_gen']
+            
             if param["MULTI_GPU"]:
                 self.crit_trainer = make_for_multi_gpu(self.crit_trainer)
+            
             self.crit_trainer.compile(optimizer=self.optim,
                                       loss=[wasserstein_loss,
                                             wasserstein_loss])
             if self.verbose_mode:
                 visualize_model(self.crit_trainer)
+            
             print("Initialization succesful")
         else :
             # load GAN from a file
@@ -180,35 +211,48 @@ class WGAN(GAN):
             print("/!\ Snapshot option is disabled : no intermediate model will be saved.\nTo activate snapshot, use the -sn (or --snapshot) option")
 
 
-        BATCH_SIZE = self.batch_size*self.n_critic
-        MINIBATCH_SIZE = self.batch_size
+        BATCH_SIZE = self.batch_size
+        MINIBATCH_SIZE = self.batch_size*self.n_critic
+        
         NB_BATCH = examples.shape[0]//BATCH_SIZE
-        EPOCH_SIZE = NB_BATCH*BATCH_SIZE # we dump the eventual non-complete batch at the end
+        EPOCH_SIZE = NB_BATCH*BATCH_SIZE
+        
+ 
         start_time = time()
-
+        dummy = np.zeros((MINIBATCH_SIZE, 1), dtype=np.float32) #given to the gradient penalty loss, but not used
+        print(BATCH_SIZE,MINIBATCH_SIZE,NB_BATCH,EPOCH_SIZE)
+        
         for i_epoch in range(self.starting_epoch, self.nb_epochs):
             epoch_time = time()
             np.random.shuffle(examples)
             progbar = Progbar(EPOCH_SIZE)
+            print("Epochen: {}/{} :".format(i_epoch+ 1, self.nb_epochs))
+            
             for i_batch in range(NB_BATCH):
                 batch = self.get_batch(examples, i_batch, BATCH_SIZE)
                 critic_loss = []
                 generator_loss = []
+                
                 for i_minibatch in range(self.n_critic):
+                    print('i_minibatch ',i_minibatch)
                     labels_for_real = self.get_label((MINIBATCH_SIZE,1))
                     labels_for_generated = -self.get_label((MINIBATCH_SIZE,1))
                     minibatch = self.get_batch(batch, i_minibatch, MINIBATCH_SIZE)
+                    print(minibatch.shape,labels_for_real.shape,labels_for_generated.shape,self.get_noise(MINIBATCH_SIZE).shape)
                     loss = self.crit_trainer.train_on_batch(
                                 [minibatch, self.get_noise(MINIBATCH_SIZE)],
                                 [labels_for_real, labels_for_generated])
+
                     critic_loss.append(loss)
+               
                 clip_weights(self.crit,-WGAN.C,WGAN.C)
                 loss = self.gen_trainer.train_on_batch(
                             self.get_noise(MINIBATCH_SIZE),
                             self.get_label((MINIBATCH_SIZE,1)))
                 generator_loss.append(loss)
                 progbar.add(BATCH_SIZE, values=[("Loss_critic", np.mean(critic_loss)-np.mean(generator_loss)),
-                                                ("Loss_generator", -np.mean(generator_loss))])
+                                                ("Loss_generator", np.mean(generator_loss))])
+                
             print("\nEpoch %s/%s, Time: %.2fs, Total time : %.2fs\n" % (i_epoch+ 1, self.nb_epochs, time()-epoch_time, time()-start_time))
             self.take_snapshot(i_epoch+1, snapshot=snapshot, tiled=True)
         print("Training complete")
