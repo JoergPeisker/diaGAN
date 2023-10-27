@@ -2,7 +2,7 @@ import os
 import numpy as np
 from mpstool.img import *
 from copy import deepcopy
-import tqdm
+from tqdm import tqdm
 SAMPLE_RATE=10000
 
 def sample_from_png(filename, param):
